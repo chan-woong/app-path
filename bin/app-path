@@ -1,0 +1,47 @@
+#!/bin/sh
+VERSION="3.1.1"
+PREFIX="${APP_PATH_PREFIX:-/var/jb}"
+AWK_PARSER="${APP_PATH_AWK_PARSER:-$PREFIX/usr/local/libexec/app-path-bplist.awk}"
+OD_BIN="${APP_PATH_OD:-$PREFIX/usr/bin/od}"
+AWK_BIN="${APP_PATH_AWK:-$PREFIX/usr/bin/awk}"
+[ -x "$OD_BIN" ] || OD_BIN="$(command -v od 2>/dev/null)"
+[ -x "$AWK_BIN" ] || AWK_BIN="$(command -v awk 2>/dev/null)"
+[ -x "$AWK_BIN" ] || AWK_BIN="$(command -v gawk 2>/dev/null)"
+TMPROOT="/tmp/app-path.$$"; mkdir -p "$TMPROOT" || exit 1
+trap 'rm -rf "$TMPROOT"' EXIT INT TERM HUP
+usage(){ cat <<EOF
+app-path v$VERSION
+Usage:
+  app-path <bundle-id> [--basic|--security|--files|--db|--config|--state|--webkit|--groups|--review|--all]
+  app-path <bundle-id> --plist <key>
+  app-path --list
+  app-path --version
+  app-path --help
+EOF
+}
+case "${1:-}" in --help|-h) usage; exit 0;; --version) echo "app-path v$VERSION"; exit 0;; esac
+[ -n "$OD_BIN" ] && [ -n "$AWK_BIN" ] && [ -f "$AWK_PARSER" ] || { echo "Error: required parser/od/awk not found" >&2; exit 1; }
+plist_run(){ F="$1"; shift; "$OD_BIN" -An -tu1 -v "$F" 2>/dev/null | "$AWK_BIN" "$@" -f "$AWK_PARSER"; }
+plist_query(){ plist_run "$1" -v query="$2"; }
+plist_get(){ plist_run "$1" -v topquery="$2" | head -n1 | cut -f2-; }
+verify(){ [ "$(plist_run "$1" -v verify="$2" 2>/dev/null)" = MATCH ]; }
+find_bundle(){ BUNDLE=""; for d in /var/containers/Bundle/Application/*; do [ -d "$d" ]||continue; for a in "$d"/*.app; do [ -f "$a/Info.plist" ]||continue; grep -a -q "$1" "$a/Info.plist" 2>/dev/null||continue; verify "$a/Info.plist" "$1" && { BUNDLE="$a"; return 0; }; done; done; return 1; }
+find_data(){ DATA=""; for d in /var/mobile/Containers/Data/Application/*; do M="$d/.com.apple.mobile_container_manager.metadata.plist"; [ -f "$M" ]||continue; grep -a -q "$1" "$M" 2>/dev/null && { DATA="$d"; return 0; }; done; return 1; }
+prov_extract(){ PROV="$BUNDLE/embedded.mobileprovision"; [ -f "$PROV" ]||return 1; S=$(grep -a -b -o '<plist' "$PROV"|head -n1|cut -d: -f1); E=$(grep -a -b -o '</plist>' "$PROV"|tail -n1|cut -d: -f1); [ -n "$S" ]&&[ -n "$E" ]||return 1; C=$((E+7-S)); dd if="$PROV" bs=1 skip="$S" count="$C" 2>/dev/null >"$TMPROOT/p.xml"; PROV_XML=$(tr -d '\r\n\t ' <"$TMPROOT/p.xml"); }
+xml_value(){ K="$1"; R=${PROV_XML#*<key>$K</key>}; [ "$R" != "$PROV_XML" ]||return 1; case "$R" in '<string>'*) V=${R#<string>}; echo "${V%%</string>*}";; '<date>'*) V=${R#<date>}; echo "${V%%</date>*}";; '<true/>'*) echo true;; '<false/>'*) echo false;; *) return 1;; esac; }
+xml_array(){ K="$1"; R=${PROV_XML#*<key>$K</key>}; [ "$R" != "$PROV_XML" ]||return 1; case "$R" in '<array>'*) B=${R#<array>}; B=${B%%</array>*};; *) return 1;; esac; while :; do case "$B" in *'<string>'*) V=${B#*<string>}; V=${V%%</string>*}; echo "$V"; B=${B#*</string>};; *) break;; esac; done; }
+basic(){ I="$BUNDLE/Info.plist"; echo "[ BASIC ]"; echo "Bundle ID       : $BID"; echo "Bundle Path     : $BUNDLE"; echo "Data Path       : ${DATA:-NOT FOUND}"; for K in CFBundleDisplayName CFBundleExecutable CFBundleShortVersionString CFBundleVersion MinimumOSVersion; do printf "%-20s: %s\n" "$K" "$(plist_get "$I" "$K")"; done; S=$(plist_run "$I" -v schemes=1|cut -f2-|sort -u|tr '\n' ' '); echo "URL Scheme      : ${S:-NOT FOUND}"; echo; }
+security(){ echo "[ SECURITY / PROVISIONING ]"; prov_extract||{ echo "Provisioning profile not parsed"; return; }; for K in application-identifier com.apple.developer.team-identifier get-task-allow aps-environment CreationDate ExpirationDate; do echo "$K : $(xml_value "$K" 2>/dev/null || echo NOT FOUND)"; done; echo "[ keychain-access-groups ]"; xml_array keychain-access-groups 2>/dev/null||echo "NOT FOUND"; echo "[ application-groups ]"; xml_array application-groups 2>/dev/null||echo "NOT FOUND"; echo "[ associated-domains ]"; xml_array com.apple.developer.associated-domains 2>/dev/null||xml_value com.apple.developer.associated-domains 2>/dev/null||echo "NOT FOUND"; echo; }
+files(){ echo "[ FILES / COMPONENTS ]"; for X in Frameworks PlugIns Extensions; do [ -d "$BUNDLE/$X" ]&&find "$BUNDLE/$X" -type f 2>/dev/null; done; [ -n "$DATA" ]&&find "$DATA" -type f \( -name '*.plist' -o -name '*.json' -o -name '*.xml' -o -name '*.db' -o -name '*.sqlite' -o -name '*.sqlite3' -o -name '*.realm' \) 2>/dev/null; echo; }
+db(){ echo "[ DATABASE ]"; [ -n "$DATA" ]&&find "$DATA" -type f \( -name '*.db' -o -name '*.sqlite' -o -name '*.sqlite3' -o -name '*.realm' \) 2>/dev/null||echo "Data container not found"; echo; }
+config(){ echo "[ CONFIG ]"; [ -n "$DATA" ]&&find "$DATA" -type f \( -name '*.plist' -o -name '*.json' -o -name '*.xml' \) 2>/dev/null||echo "Data container not found"; echo; }
+state(){ echo "[ SAVED APPLICATION STATE ]"; [ -d "$DATA/Library/Saved Application State" ]&&find "$DATA/Library/Saved Application State" -type f 2>/dev/null||echo "No Saved Application State"; echo; }
+webkit(){ echo "[ WEBKIT ]"; [ -n "$DATA" ]&&find "$DATA" -type f \( -path '*WebKit*' -o -path '*Cookies*' -o -path '*WebsiteData*' -o -path '*HTTPStorages*' -o -path '*LocalStorage*' \) 2>/dev/null||echo "Data container not found"; echo; }
+groups(){ echo "[ APPLICATION GROUPS ]"; prov_extract&&xml_array application-groups 2>/dev/null||echo "NOT FOUND"; echo; }
+review(){ I="$BUNDLE/Info.plist"; echo "[ SECURITY REVIEW INDICATORS ]"; grep -a -q NSAppTransportSecurity "$I"&&echo "ATS configuration key : FOUND"||echo "ATS configuration key : NOT FOUND"; grep -a -q NSAllowsArbitraryLoads "$I"&&echo "NSAllowsArbitraryLoads : FOUND - MANUAL REVIEW"||echo "NSAllowsArbitraryLoads : NOT FOUND"; S=$(plist_run "$I" -v schemes=1); [ -n "$S" ]&&echo "URL scheme configuration : FOUND"||echo "URL scheme configuration : NOT FOUND"; prov_extract&&echo "get-task-allow : $(xml_value get-task-allow 2>/dev/null||echo NOT FOUND)"; echo; }
+list_apps(){ echo "[ INSTALLED APPS ]"; for d in /var/containers/Bundle/Application/*; do [ -d "$d" ]||continue; for a in "$d"/*.app; do I="$a/Info.plist"; [ -f "$I" ]||continue; L=$(plist_run "$I" -v list=1 2>/dev/null); [ -n "$L" ]&&printf '%s\t%s\n' "$L" "$a"; done; done; }
+[ $# -ge 1 ]||{ usage; exit 2; }; [ "$1" = --list ]&&{ list_apps; exit; }
+BID="$1"; shift; MODE=basic
+if [ $# -gt 0 ]; then case "$1" in --basic)MODE=basic;;--security)MODE=security;;--files)MODE=files;;--db)MODE=db;;--config)MODE=config;;--state)MODE=state;;--webkit)MODE=webkit;;--groups)MODE=groups;;--review)MODE=review;;--all)MODE=all;;--plist)MODE=plist; KEY="${2:-}"; [ -n "$KEY" ]||exit 2;;*)usage;exit 2;;esac; fi
+find_bundle "$BID"||{ echo "Error: Bundle ID not found: $BID"; exit 1; }; find_data "$BID"||DATA=""
+case "$MODE" in basic)basic;;security)security;;files)files;;db)db;;config)config;;state)state;;webkit)webkit;;groups)groups;;review)review;;plist)plist_query "$BUNDLE/Info.plist" "$KEY";;all)basic;files;db;config;state;webkit;security;groups;review;;esac

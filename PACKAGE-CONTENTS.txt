@@ -1,0 +1,19 @@
+app-path GitHub-ready package
+
+.gitignore
+CHANGELOG.md
+CONTRIBUTING.md
+LICENSE
+README.ko.md
+README.md
+SECURITY.md
+bin/app-path
+docs/ANALYSIS-GUIDE.ko.md
+docs/ANALYSIS-GUIDE.md
+docs/FINDINGS-GUIDE.ko.md
+docs/FINDINGS-GUIDE.md
+install.sh
+libexec/app-path-bplist.awk
+uninstall.sh
+
+Application-specific test content and the examples directory are intentionally excluded.
