@@ -1,218 +1,137 @@
 # app-path
 
-`app-path` is a lightweight command-line utility for **jailbroken iOS application discovery and security triage**.
+`app-path` is a lightweight command-line utility for **authorized iOS application security assessment on jailbroken devices**.
 
-It is designed for mobile application security assessments where common iOS/macOS utilities such as `plutil` may not be available on the target device.
+It discovers installed applications and their containers, parses binary `Info.plist` files without relying on `plutil`, inspects provisioning and application metadata, enumerates local storage, and highlights configuration values that are useful during manual vulnerability analysis.
 
-Given an application's Bundle ID, `app-path` can locate the installed application bundle and data container, parse a binary `Info.plist`, inspect URL schemes and provisioning information, enumerate local storage, and collect indicators useful during an iOS security assessment.
-
-> `app-path` is an evidence collection and triage tool.
-> An indicator reported by the tool is **not automatically a vulnerability**. Reachability, security controls, attack preconditions, and actual impact must be validated separately.
-
-Korean documentation: [README.ko.md](README.ko.md)
+The tool is intended primarily as a **reconnaissance and triage utility**. It does not automatically declare an application vulnerable. Instead, it helps an analyst quickly identify attack surfaces and evidence that should be investigated with static analysis, dynamic instrumentation, filesystem analysis, or network testing.
 
 ---
 
-## Why app-path?
+## Features
 
-During an iOS application security assessment, an analyst frequently needs to answer questions such as:
+### Application discovery
 
-* Where is the application bundle?
-* Where is the application's writable data container?
-* What is the application's executable name and version?
-* Which URL schemes or deep-link entry points are registered?
-* Does the application contain ATS exceptions?
-* Was the application provisioned with `get-task-allow`?
-* Which Keychain Access Groups are available?
-* Does the application use Application Groups?
-* Are Associated Domains configured?
-* Which frameworks, plug-ins, or extensions are bundled?
-* Are SQLite, Realm, plist, JSON, or XML files stored locally?
-* Does the application leave data in Saved Application State?
-* Does it use WebKit storage such as cookies or Local Storage?
+Find installed applications by Bundle ID and identify:
 
-`app-path` collects this information from a jailbroken device through a single CLI.
+* Application Bundle path
+* Application Data Container path
+* `Info.plist`
+* Executable name
+* Display name
+* Application version
+* Build number
+* Minimum supported iOS version
 
----
-
-# Features
-
-## Application Discovery
-
-Search installed applications and identify their Bundle IDs.
-
-```sh
-app-path --list
-```
-
-Example output:
-
-```text
-[ INSTALLED APPS ]
-
-com.example.app    Example App    1.4.2    1042    /var/containers/Bundle/Application/.../Example.app
-```
-
-This is useful when the application name is known but its exact Bundle ID is not.
-
----
-
-## Bundle and Data Container Discovery
+Example:
 
 ```sh
 app-path com.example.app --basic
 ```
 
-Example:
+Typical output:
 
 ```text
 [ BASIC ]
-
 Bundle ID       : com.example.app
 Bundle Path     : /var/containers/Bundle/Application/<UUID>/Example.app
 Data Path       : /var/mobile/Containers/Data/Application/<UUID>
 
 CFBundleDisplayName : Example
 CFBundleExecutable  : Example
-Version             : 1.4.2
-Build               : 1042
+Version             : 1.2.3
+Build               : 123
 Minimum iOS         : 15.0
+
 URL Scheme          : example
 ```
 
-The application bundle normally contains executable code and packaged resources.
-
-The Data Container contains writable application data such as:
-
-```text
-Documents/
-Library/
-Library/Preferences/
-Library/Caches/
-tmp/
-```
-
-Knowing both locations is fundamental for static analysis and local-storage review.
+This provides the paths required for subsequent static analysis, filesystem inspection, binary extraction, and runtime instrumentation.
 
 ---
 
-# Binary Info.plist Parsing
+## Binary Info.plist Parsing
 
-iOS applications commonly use a binary property-list format:
+Many iOS applications store `Info.plist` in Apple's binary plist format.
 
-```text
-bplist00
-```
+On constrained jailbreak environments, utilities such as `plutil`, Python plist libraries, or other parsing tools may not be installed.
 
-On constrained jailbreak environments, `plutil` or Python plist libraries may not be available.
-
-`app-path` includes an AWK-based binary plist parser:
+`app-path` includes its own lightweight parser implemented using:
 
 ```text
-libexec/app-path-bplist.awk
+od + AWK
 ```
 
-The parser reads plist bytes through `od` and traverses the binary plist object graph.
+The parser understands the binary plist object table and can retrieve common dictionaries, arrays, strings, integers, and Boolean values.
 
-This allows common `Info.plist` values to be inspected without depending on:
+Example:
 
-* `plutil`
-* Python
-* Ruby
-* Swift
-* Objective-C runtime helpers
-* third-party plist tools
+```sh
+app-path com.example.app --plist CFBundleIdentifier
+```
 
----
+```text
+CFBundleIdentifier    com.example.app
+```
 
-# Query Info.plist
-
-Specific plist keys can be queried directly.
+Another example:
 
 ```sh
 app-path com.example.app --plist CFBundleURLSchemes
 ```
-
-Other useful examples:
-
-```sh
-app-path com.example.app --plist CFBundleURLTypes
-
-app-path com.example.app --plist LSApplicationQueriesSchemes
-
-app-path com.example.app --plist CFBundleDocumentTypes
-
-app-path com.example.app --plist NSAppTransportSecurity
-```
-
-This is useful for identifying application entry points and security-relevant configuration.
-
----
-
-# URL Scheme / Deep-Link Review
-
-Applications may register custom URL schemes.
-
-For example:
-
-```text
-example://
-```
-
-Run:
-
-```sh
-app-path com.example.app --basic
-```
-
-or:
-
-```sh
-app-path com.example.app --plist CFBundleURLSchemes
-```
-
-Possible output:
 
 ```text
 CFBundleURLSchemes    example
 ```
 
-A registered URL scheme represents an externally reachable application entry point.
-
-During a security assessment, investigate whether external input can reach:
-
-* authentication flows
-* account operations
-* sensitive screens
-* payment or transaction functions
-* WebViews
-* redirect handlers
-* internal application functionality
-
-Potential vulnerability classes include:
-
-```text
-Deep Link Authentication Bypass
-Deep Link Authorization Bypass
-Unvalidated URL Parameters
-Unsafe Redirect Handling
-WebView Navigation Manipulation
-Sensitive Data Exposure Through URLs
-```
-
-The existence of a URL scheme alone does not prove any of these vulnerabilities.
+This allows application metadata to be inspected directly on the device without copying every plist to another system first.
 
 ---
 
-# Provisioning and Entitlement Review
+## Installed Application Enumeration
 
-Run:
+```sh
+app-path --list
+```
+
+The command enumerates applications found under the iOS application bundle container.
+
+Typical output:
+
+```text
+[ INSTALLED APPS ]
+
+com.example.app       Example       1.2.3       123
+com.example.second    SecondApp     2.0.0       45
+```
+
+This is useful when the exact Bundle ID of the assessment target is not known.
+
+---
+
+## Security and Provisioning Analysis
 
 ```sh
 app-path com.example.app --security
 ```
 
-Example output:
+The command inspects security-relevant values from the embedded provisioning profile.
+
+Examples include:
+
+```text
+application-identifier
+com.apple.developer.team-identifier
+get-task-allow
+aps-environment
+keychain-access-groups
+application-groups
+com.apple.developer.associated-domains
+CreationDate
+ExpirationDate
+```
+
+Typical output:
 
 ```text
 [ SECURITY / PROVISIONING ]
@@ -222,10 +141,6 @@ team-identifier        : TEAMID
 get-task-allow         : false
 aps-environment        : production
 
-[ associated-domains ]
-
-applinks:example.com
-
 [ keychain-access-groups ]
 
 TEAMID.com.example.shared
@@ -234,44 +149,39 @@ TEAMID.com.example.shared
 
 group.com.example.shared
 
-[ profile flags ]
+[ associated-domains ]
 
-CreationDate           : ...
-ExpirationDate         : ...
+applinks:example.com
 ```
 
-These values help identify the application's security boundaries.
+These values help identify trust relationships and security boundaries that require further review.
 
 ---
 
-## get-task-allow
+## `get-task-allow`
 
-A particularly important value is:
+The `get-task-allow` entitlement is particularly useful during build and provisioning review.
 
-```text
-get-task-allow
-```
-
-For example:
+Example:
 
 ```text
 get-task-allow : true
 ```
 
-This entitlement allows debugging-related task access under appropriate platform conditions.
+A value of `true` may indicate that debugging capabilities are enabled.
 
-If it appears in a production-distributed application, analysts should verify:
+This should **not automatically be reported as a vulnerability**.
 
-* build type
-* provisioning context
-* debugging exposure
-* whether the entitlement was intentionally enabled
+The analyst should determine:
 
-Do not classify the application as vulnerable solely because the value is present.
+* whether the application is a development/debug build,
+* whether the assessed package represents the production distribution,
+* whether debugging creates a realistic security exposure,
+* and whether sensitive functionality becomes accessible as a result.
 
 ---
 
-# Keychain Access Groups
+## Keychain Access Groups
 
 Example:
 
@@ -281,21 +191,23 @@ Example:
 TEAMID.com.example.shared
 ```
 
-Keychain Access Groups define Keychain sharing boundaries between applications.
+Keychain access groups define Keychain namespaces that may be shared between applications signed under compatible entitlements.
 
-During an assessment, determine:
+This output can guide investigation into:
 
-* which applications share the group
-* what data is stored in the shared namespace
-* whether sensitive credentials or tokens are shared
-* whether another application can access the same group
-* whether access controls match the intended trust model
+* shared authentication tokens,
+* credentials,
+* cryptographic keys,
+* session information,
+* cross-application trust relationships.
 
-This can support investigation of issues involving inappropriate credential sharing or excessive trust relationships.
+The presence of a shared group alone is not a vulnerability.
+
+The security question is whether an unintended or insufficiently trusted application can access sensitive data through that group.
 
 ---
 
-# Application Groups
+## Application Groups
 
 Example:
 
@@ -305,25 +217,19 @@ Example:
 group.com.example.shared
 ```
 
-Application Groups allow multiple applications or extensions to access a shared container.
+Application Groups allow multiple related applications or extensions to share a container.
 
-Review:
+During an assessment, investigate:
 
-```text
-Shared preferences
-Shared files
-Authentication state
-Session information
-Tokens
-IPC data
-Extension communication
-```
-
-The presence of an Application Group is not itself a vulnerability. The important question is what crosses that trust boundary.
+* which applications/extensions use the group,
+* what information is stored in the shared container,
+* whether authentication state is shared,
+* whether another component can modify trusted data,
+* whether authorization decisions depend on shared files.
 
 ---
 
-# Associated Domains
+## Associated Domains
 
 Example:
 
@@ -333,91 +239,147 @@ Example:
 applinks:example.com
 ```
 
-Associated Domains are commonly used for Universal Links.
+Associated Domains can expose Universal Link-related attack surface.
 
-During assessment, review:
+Further testing should include:
 
-* associated domain ownership
-* AASA configuration
-* accepted URL paths
-* authentication behavior
-* authorization after link handling
-* redirects
-* sensitive parameters
-
-This helps identify the Universal Link attack surface.
+* Apple App Site Association configuration,
+* accepted URL paths,
+* authentication requirements,
+* redirect behavior,
+* parameter validation,
+* sensitive actions triggered from Universal Links.
 
 ---
 
-# Local Storage Discovery
+## URL Scheme / Deep Link Analysis
+
+Applications may register custom URL schemes.
+
+Example:
+
+```sh
+app-path com.example.app --plist CFBundleURLSchemes
+```
+
+Output:
+
+```text
+CFBundleURLSchemes    example
+```
+
+This indicates that URLs similar to:
+
+```text
+example://...
+```
+
+may be handled by the application.
+
+The analyst should then locate the corresponding URL handler in the application code.
+
+Useful native methods and APIs include:
+
+```text
+application:openURL:options:
+scene:openURLContexts:
+openURL
+canOpenURL
+```
+
+Potential security issues include:
+
+* authentication bypass,
+* authorization bypass,
+* unvalidated parameters,
+* arbitrary navigation,
+* unsafe WebView loading,
+* sensitive action invocation,
+* token leakage,
+* open redirect behavior,
+* deep-link hijacking.
+
+A registered URL scheme is an **attack-surface indicator**, not proof of a vulnerability.
+
+---
+
+## ATS / Transport Security Review
 
 Run:
 
 ```sh
-app-path com.example.app --files
+app-path com.example.app --review
 ```
 
-The tool searches for potentially interesting files such as:
+The tool checks for indicators such as:
 
 ```text
-*.plist
-*.json
-*.xml
+NSAppTransportSecurity
+NSAllowsArbitraryLoads
+```
+
+Example:
+
+```text
+[ SECURITY REVIEW INDICATORS ]
+
+ATS configuration key : FOUND
+NSAllowsArbitraryLoads : FOUND - MANUAL REVIEW
+```
+
+If an ATS exception is present, further investigation should determine:
+
+* which domains are affected,
+* whether HTTP traffic is actually permitted,
+* whether sensitive information is transmitted,
+* whether TLS validation is correctly implemented,
+* whether redirects downgrade transport security.
+
+An ATS exception by itself should not be treated as proof of exploitable insecure communication.
+
+Burp Suite or another authorized interception environment can be used to validate the actual network behavior.
+
+---
+
+## Local Storage Discovery
+
+Applications frequently store information under their Data Container.
+
+`app-path` provides several discovery modes.
+
+### Database files
+
+```sh
+app-path com.example.app --db
+```
+
+Searches for files such as:
+
+```text
 *.db
 *.sqlite
 *.sqlite3
 *.realm
 ```
 
-Example:
+Possible investigation targets include:
 
-```text
-[ FILES / COMPONENTS ]
+* access tokens,
+* refresh tokens,
+* user identifiers,
+* account information,
+* cached API responses,
+* personally identifiable information,
+* cryptographic material,
+* authentication state.
 
-/var/mobile/Containers/Data/Application/<UUID>/Library/Preferences/com.example.app.plist
+The presence of a database file is not itself a vulnerability.
 
-/var/mobile/Containers/Data/Application/<UUID>/Documents/application.db
-
-/var/mobile/Containers/Data/Application/<UUID>/Library/config.json
-```
-
-These files become candidates for manual sensitive-data review.
-
----
-
-# Database Discovery
-
-```sh
-app-path com.example.app --db
-```
-
-Searches for:
-
-```text
-.db
-.sqlite
-.sqlite3
-.realm
-```
-
-Review discovered databases for security-relevant data such as:
-
-```text
-Access tokens
-Refresh tokens
-Session identifiers
-User information
-Authentication state
-Personal information
-Transaction information
-Application secrets
-```
-
-The presence of a database does not imply insecure storage.
+The analyst must inspect its contents and protection requirements.
 
 ---
 
-# Configuration File Discovery
+## Configuration Files
 
 ```sh
 app-path com.example.app --config
@@ -426,55 +388,56 @@ app-path com.example.app --config
 Searches for:
 
 ```text
-.plist
-.json
-.xml
+*.plist
+*.json
+*.xml
 ```
 
-These files may contain:
+These files may reveal:
 
-```text
-API endpoints
-Feature flags
-Environment configuration
-Internal URLs
-Client configuration
-Authentication state
-Tokens or credentials
-```
+* API endpoints,
+* internal hostnames,
+* feature flags,
+* environment information,
+* client configuration,
+* identifiers,
+* hard-coded secrets or credentials.
 
-Any discovered value should be evaluated in context before it is treated as sensitive.
+Any suspected secret must be validated before reporting.
 
 ---
 
-# Saved Application State
+## Saved Application State
 
 ```sh
 app-path com.example.app --state
 ```
 
-iOS may persist application UI state under:
+The command checks:
 
 ```text
-Library/Saved Application State/
+Library/Saved Application State
 ```
 
-Security review should determine whether sensitive information remains in persisted application state after:
+Application state files can sometimes preserve information displayed by the application.
 
-* logout
-* application termination
-* account switching
-* session expiration
+Review them for unexpected persistence of:
+
+* account information,
+* sensitive screen state,
+* transaction information,
+* authentication-related data,
+* private user information.
 
 ---
 
-# WebKit Storage
+## WebKit Storage
 
 ```sh
 app-path com.example.app --webkit
 ```
 
-The tool searches for WebKit-related storage paths such as:
+The tool searches for paths associated with:
 
 ```text
 WebKit
@@ -484,31 +447,41 @@ HTTPStorages
 LocalStorage
 ```
 
-These locations are particularly relevant for applications using:
+This is especially useful when the application uses:
 
 ```text
 WKWebView
-Hybrid application frameworks
-Embedded web authentication
-JavaScript bridges
 ```
 
-Review for:
+Possible review targets include:
+
+* session cookies,
+* access tokens,
+* Web storage,
+* cached web content,
+* persistent authentication state,
+* JavaScript bridge-related data.
+
+Static analysis should also search for APIs such as:
 
 ```text
-Session cookies
-Authentication tokens
-Local Storage
-Cached sensitive content
-Persistent web sessions
-WebView-origin data
+WKWebView
+WKScriptMessageHandler
+addScriptMessageHandler
+evaluateJavaScript
 ```
+
+This can help identify native-to-JavaScript trust boundaries.
 
 ---
 
-# Embedded Components
+## Frameworks, Plug-ins, and Extensions
 
-`--files` also enumerates application components under locations such as:
+```sh
+app-path com.example.app --files
+```
+
+The command enumerates embedded components including:
 
 ```text
 Frameworks/
@@ -516,32 +489,37 @@ PlugIns/
 Extensions/
 ```
 
-This can help identify:
+These components can significantly increase the application's attack surface.
 
-* third-party frameworks
-* app extensions
-* embedded SDKs
-* additional executable components
-* unexpected attack surfaces
+Review embedded components for:
 
-The discovered component names can then be correlated with IDA, Ghidra, or other static-analysis tools.
+* third-party SDKs,
+* WebView frameworks,
+* cryptographic libraries,
+* authentication SDKs,
+* network libraries,
+* application extensions,
+* IPC mechanisms,
+* custom security frameworks.
+
+The discovered binaries can then be analyzed with tools such as IDA or Ghidra.
 
 ---
 
-# Security Review Mode
-
-For a quick first-pass review:
+## Quick Security Review
 
 ```sh
 app-path com.example.app --review
 ```
+
+This mode provides a quick overview of several security-relevant indicators.
 
 Example:
 
 ```text
 [ SECURITY REVIEW INDICATORS ]
 
-ATS configuration key      : FOUND
+ATS configuration key       : FOUND
 NSAllowsArbitraryLoads      : NOT FOUND
 URL scheme configuration    : FOUND
 get-task-allow              : false
@@ -550,188 +528,148 @@ application-groups          : FOUND
 associated-domains          : FOUND
 ```
 
-This mode is intended to answer:
-
-> Which areas should I investigate next?
-
-It is not intended to answer:
-
-> Is this application vulnerable?
+The purpose of this output is to determine **where manual analysis should continue**.
 
 ---
 
-# Full Collection
+## Full Collection
 
 ```sh
 app-path com.example.app --all
 ```
 
-This executes the primary collection modes together:
+This combines the major inspection modes and is useful for the initial reconnaissance phase of an assessment.
 
-```text
-Basic application information
-Embedded components
-Database discovery
-Configuration discovery
-Saved Application State
-WebKit storage
-Provisioning information
-Application Groups
-Security review indicators
-```
+Depending on the application, the output may include:
 
-This is useful at the beginning of an assessment when building an initial attack-surface map.
+* Bundle metadata
+* Application paths
+* URL schemes
+* Embedded components
+* Databases
+* Configuration files
+* Saved Application State
+* WebKit storage
+* Provisioning information
+* Application groups
+* Security-review indicators
 
 ---
 
-# Security Assessment Workflow
+## Recommended Vulnerability Assessment Workflow
 
 A practical workflow is:
 
 ```text
-Installed application
-        │
-        ▼
+             app-path --list
+                    |
+                    v
+                --basic
+                    |
+          +---------+---------+
+          |                   |
+          v                   v
+     --security            --review
+          |                   |
+          +---------+---------+
+                    |
+                    v
+        --files / --db / --config
+          --state / --webkit
+                    |
+                    v
+              Static Analysis
+              IDA / Ghidra
+                    |
+                    v
+             Dynamic Analysis
+                  Frida
+                    |
+                    v
+             Network Analysis
+               Burp Suite
+                    |
+                    v
+            Manual Validation
+                    |
+                    v
+           Security Finding
+```
+
+### Phase 1 — Reconnaissance
+
+```sh
 app-path --list
-        │
-        ▼
---basic
-        │
-        ├── Bundle path
-        ├── Data container
-        ├── Version/build
-        └── URL schemes
-        │
-        ▼
---security / --groups
-        │
-        ├── Provisioning
-        ├── get-task-allow
-        ├── Keychain groups
-        ├── Application groups
-        └── Associated domains
-        │
-        ▼
---files / --db / --config
-        │
-        └── Local storage review
-        │
-        ▼
---state / --webkit
-        │
-        └── Persistent state and WebView storage
-        │
-        ▼
-Static analysis
-        │
-        ├── IDA
-        ├── Ghidra
-        └── other authorized analysis tools
-        │
-        ▼
-Dynamic validation
-        │
-        ├── Frida
-        └── Burp Suite
-        │
-        ▼
-Validated security finding
+app-path com.example.app --basic
+app-path com.example.app --all
 ```
+
+Establish the application layout and identify interesting components.
+
+### Phase 2 — Configuration review
+
+Inspect:
+
+```text
+Info.plist
+Provisioning Profile
+URL Schemes
+Associated Domains
+Keychain Groups
+Application Groups
+ATS
+```
+
+### Phase 3 — Storage review
+
+Inspect candidate files discovered through:
+
+```sh
+app-path com.example.app --db
+app-path com.example.app --config
+app-path com.example.app --state
+app-path com.example.app --webkit
+```
+
+### Phase 4 — Static analysis
+
+Use the discovered executable and frameworks with tools such as:
+
+```text
+IDA
+Ghidra
+```
+
+Trace security-sensitive configuration values to their implementation.
+
+### Phase 5 — Dynamic analysis
+
+Use Frida in an authorized environment to validate runtime behavior.
+
+Examples of useful investigation targets include:
+
+```text
+URL handlers
+WebView navigation
+JavaScript bridges
+Keychain access
+authentication state
+file/database access
+certificate validation
+cryptographic operations
+```
+
+### Phase 6 — Network validation
+
+Use Burp Suite or an equivalent authorized interception proxy to determine whether configuration indicators translate into insecure network behavior.
 
 ---
 
-# Static Analysis Correlation
+## From Indicator to Finding
 
-Information discovered with `app-path` can be correlated with native application code.
+`app-path` deliberately separates **discovery** from **vulnerability determination**.
 
-Useful strings/APIs to investigate include:
-
-```text
-WKWebView
-WKScriptMessageHandler
-evaluateJavaScript
-openURL
-application:openURL:options:
-scene:openURLContexts:
-SecItemAdd
-SecItemCopyMatching
-UserDefaults
-SQLite
-Realm
-```
-
-For example:
-
-```text
-app-path
-    ↓
-URL Scheme discovered
-    ↓
-Locate URL handler in native code
-    ↓
-Trace external parameters
-    ↓
-Identify privileged operation
-    ↓
-Validate authentication/authorization
-```
-
-This reduces the amount of code that must be inspected blindly.
-
----
-
-# Dynamic Analysis Correlation
-
-After identifying a candidate attack surface, dynamic instrumentation can verify whether it is actually reachable.
-
-Examples:
-
-```text
-URL Scheme
-    → trace URL handler
-    → inspect parameters
-    → observe sensitive function calls
-
-WKWebView
-    → inspect navigation
-    → trace JavaScript bridge
-    → verify origin/trust validation
-
-Local Storage
-    → trigger login/logout
-    → observe file changes
-    → determine whether sensitive data persists
-
-Network configuration
-    → capture authorized test traffic
-    → verify actual TLS behavior
-```
-
----
-
-# What Vulnerabilities Can app-path Help Investigate?
-
-The tool can provide initial evidence relevant to:
-
-* insecure deep-link handling
-* URL scheme attack surface
-* Universal Link handling
-* WebView attack surface
-* JavaScript bridge exposure
-* weak transport configuration
-* debug/provisioning exposure
-* excessive entitlements
-* inappropriate Keychain sharing
-* insecure Application Group usage
-* sensitive local-data storage
-* application-state leakage
-* WebKit storage exposure
-* configuration leakage
-* unexpected embedded components
-
-`app-path` does **not** automatically prove these vulnerabilities.
-
-A useful assessment model is:
+A useful model is:
 
 ```text
 Indicator
@@ -747,11 +685,83 @@ Demonstrable impact
 Reportable security finding
 ```
 
+For example:
+
+```text
+URL Scheme exists
+```
+
+is only an indicator.
+
+However:
+
+```text
+External URL
+    ->
+URL Handler
+    ->
+Sensitive operation
+    ->
+No authentication/authorization validation
+    ->
+Unauthorized action
+```
+
+may constitute a valid security finding.
+
+Similarly:
+
+```text
+SQLite database exists
+```
+
+is not a vulnerability.
+
+But:
+
+```text
+SQLite database
+    ->
+Contains reusable authentication token
+    ->
+Token stored without appropriate protection
+    ->
+Token can be reused to access the account
+```
+
+provides substantially stronger evidence for a security finding.
+
 ---
 
-# Requirements
+## What app-path Can Help Investigate
 
-The target jailbroken device should provide common command-line utilities including:
+The tool can provide starting evidence for investigation of:
+
+* Insecure Deep Link handling
+* URL Scheme attack surface
+* Universal Link security
+* WebView attack surface
+* JavaScript bridge exposure
+* Weak ATS / transport configuration
+* Debug entitlement exposure
+* Excessive entitlements
+* Shared Keychain trust boundaries
+* Shared Application Group containers
+* Sensitive local data storage
+* Configuration information leakage
+* Application state leakage
+* WebKit storage exposure
+* Unexpected embedded frameworks
+* Extension/plug-in attack surface
+* Provisioning/build configuration issues
+
+It does **not** automatically confirm any of these vulnerabilities.
+
+---
+
+## Requirements
+
+The target is a jailbroken iOS device with access to common command-line utilities including:
 
 ```text
 awk or gawk
@@ -775,32 +785,25 @@ Default installation paths:
 
 ---
 
-# Installation
+## Limitations
 
-```sh
-git clone https://github.com/chan-woong/app-path.git
-cd app-path
+`app-path` is not a complete mobile security scanner.
 
-sh install.sh
+It does not:
 
-export PATH="/var/jb/usr/local/bin:$PATH"
-```
+* automatically exploit discovered attack surfaces,
+* determine vulnerability severity,
+* decrypt protected application data,
+* automatically dump Keychain secrets,
+* replace reverse engineering,
+* replace runtime analysis,
+* replace network analysis.
 
-Verify:
-
-```sh
-app-path --version
-```
-
-Expected:
-
-```text
-app-path v3.1.1
-```
+Provisioning parsing is intentionally lightweight, and some uncommon binary plist structures or non-ASCII UTF-16BE strings may require additional analysis.
 
 ---
 
-# Documentation
+## Documentation
 
 Additional documentation is available under:
 
@@ -812,38 +815,16 @@ docs/
 └── FINDINGS-GUIDE.ko.md
 ```
 
-* `ANALYSIS-GUIDE.md` — practical security-analysis workflow
-* `FINDINGS-GUIDE.md` — interpretation of security indicators
-* Korean equivalents are provided for both documents.
+Korean project documentation is also available in:
+
+```text
+README.ko.md
+```
 
 ---
 
-# Limitations
+## Authorized Use
 
-`app-path` is not a complete iOS security scanner.
+`app-path` is intended for legitimate mobile application security research and authorized vulnerability assessments.
 
-It does not:
-
-* automatically determine exploitability
-* automatically assign vulnerability severity
-* decrypt protected application data
-* automatically dump Keychain secrets
-* replace static analysis
-* replace dynamic instrumentation
-* replace network analysis
-
-Provisioning-profile parsing is intentionally lightweight, and some non-ASCII binary plist strings may be represented conservatively.
-
----
-
-# Responsible Use
-
-Use `app-path` only on applications and devices that you own or are explicitly authorized to assess.
-
-Security findings should be based on reproducible evidence and validated impact rather than a configuration indicator alone.
-
----
-
-# License
-
-MIT License. See [LICENSE](LICENSE).
+Use it only on applications, devices, and environments that you own or are explicitly authorized to test.
